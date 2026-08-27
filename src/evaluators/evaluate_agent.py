@@ -7,42 +7,51 @@ Runs the full evaluation pipeline:
 3. Runs evaluation and polls for completion
 4. Retrieves and displays results
 
-Evaluates: Intent Resolution, Relevance, and Groundedness
+Evaluates:
+- Intent Resolution
+- Relevance
+- Groundedness
 """
 
 import os
 import sys
 import time
 from pathlib import Path
+
 from dotenv import load_dotenv
 from azure.identity import DefaultAzureCredential
 from azure.ai.projects import AIProjectClient
+
 from openai.types.eval_create_params import DataSourceConfigCustom
 from openai.types.evals.create_eval_jsonl_run_data_source_param import (
     CreateEvalJSONLRunDataSourceParam,
     SourceFileID,
 )
 
+
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
 
-load_dotenv()  # reads variables from the .env file in your project root
+load_dotenv()
 
-endpoint              = os.environ.get("AZURE_AI_PROJECT_ENDPOINT")
+# Reads variables from the .env file in your project root
+endpoint = os.environ.get("AZURE_AI_PROJECT_ENDPOINT")
 model_deployment_name = os.environ.get("MODEL_NAME", "gpt-5.1")
-dataset_name          = "trail-guide-evaluation-dataset"
-dataset_version       = "1"
+
+dataset_name = "trail-guide-evaluation-dataset"
+dataset_version = "1"
 
 # The script writes a plain-text summary here when it finishes.
-# This file is committed to the branch so the GitHub Actions workflow
-# can read it and post results as a PR comment — no re-running needed.
+# This file can be consumed by GitHub Actions.
 RESULTS_FILE = Path("evaluation_results.txt")
+
 
 if not endpoint:
     print("ERROR: AZURE_AI_PROJECT_ENDPOINT is not set.")
     print("       Add it to your .env file and try again.")
     sys.exit(1)
+
 
 # ---------------------------------------------------------------------------
 # Azure clients
@@ -54,7 +63,7 @@ project_client = AIProjectClient(
     credential=DefaultAzureCredential(),
 )
 
-# The OpenAI-compatible client exposes the Evals API
+# OpenAI-compatible client exposes the Evals API
 client = project_client.get_openai_client()
 
 
@@ -63,7 +72,7 @@ client = project_client.get_openai_client()
 # ---------------------------------------------------------------------------
 
 def section(title: str) -> None:
-    """Print a clearly visible section header to make the log easy to skim."""
+    """Print a clearly visible section header."""
     print(f"\n{'=' * 80}")
     print(f"{title}")
     print(f"{'=' * 80}")
@@ -75,13 +84,10 @@ def section(title: str) -> None:
 
 def upload_dataset() -> str:
     """
-    Upload the JSONL evaluation dataset to Azure AI Foundry and return its ID.
-
-    The dataset is a list of JSON objects, each containing:
-      - query        : the user question sent to the agent
-      - response     : the agent's answer
-      - ground_truth : the expected correct answer (used by some evaluators)
+    Upload the JSONL evaluation dataset to Azure AI Foundry
+    and return its ID.
     """
+
     section("Step 1: Uploading evaluation dataset")
 
     dataset_path = (
@@ -105,22 +111,36 @@ def upload_dataset() -> str:
             version=dataset_version,
             file_path=str(dataset_path),
         ).id
-        print(f"\n✓ Dataset uploaded successfully")
+
+        print("\n✓ Dataset uploaded successfully")
 
     except Exception as upload_error:
-        # If this version was already uploaded in a previous run, reuse it.
-        # Foundry does not allow uploading the same name+version twice.
+
+        # If this version was already uploaded in a previous run,
+        # reuse it.
         if "already exists" in str(upload_error):
-            print(f"\n  Dataset version {dataset_version} already exists in Foundry.")
-            print(f"  Retrieving existing dataset ID...")
-            dataset_obj = project_client.datasets.get(name=dataset_name, version=dataset_version)
+
+            print(
+                f"\n  Dataset version {dataset_version} "
+                "already exists in Foundry."
+            )
+
+            print("  Retrieving existing dataset ID...")
+
+            dataset_obj = project_client.datasets.get(
+                name=dataset_name,
+                version=dataset_version,
+            )
+
             data_id = dataset_obj.id
-            print(f"  ✓ Using existing dataset")
+
+            print("  ✓ Using existing dataset")
+
         else:
-            # Any other upload error is unexpected — re-raise so main() catches it
             raise
 
     print(f"  Dataset ID: {data_id}")
+
     return data_id
 
 
@@ -132,17 +152,20 @@ def create_evaluation_definition():
     """
     Register an evaluation definition in Foundry.
 
-    This tells the platform:
-      - What data schema to expect (query / response / ground_truth)
-      - Which built-in evaluators to run and how to map dataset fields to them
-
-    Returns the evaluation object (its ID is needed in later steps).
+    Evaluators:
+    - Intent Resolution
+    - Relevance
+    - Groundedness
     """
+
     section("Step 2: Creating evaluation definition")
 
-    print(f"\nConfiguration:")
+    print("\nConfiguration:")
     print(f"  Judge Model: {model_deployment_name}")
-    print(f"  Evaluators: Intent Resolution, Relevance, Groundedness")
+    print(
+        "  Evaluators: "
+        "Intent Resolution, Relevance, Groundedness"
+    )
 
     # Tell Foundry the shape of each record in the dataset
     data_source_config = DataSourceConfigCustom(
@@ -150,59 +173,79 @@ def create_evaluation_definition():
         item_schema={
             "type": "object",
             "properties": {
-                "query":        {"type": "string"},
-                "response":     {"type": "string"},
-                "ground_truth": {"type": "string"},
+                "query": {
+                    "type": "string"
+                },
+                "response": {
+                    "type": "string"
+                },
+                "ground_truth": {
+                    "type": "string"
+                },
             },
-            "required": ["query", "response", "ground_truth"],
+            "required": [
+                "query",
+                "response",
+                "ground_truth",
+            ],
         },
     )
 
-    # Each entry names a built-in evaluator and maps dataset columns to its
-    # expected parameters using the {{item.<column>}} template syntax.
+    # Built-in evaluator configuration
     testing_criteria = [
+
         {
             "type": "azure_ai_evaluator",
             "name": "intent_resolution",
             "evaluator_name": "builtin.intent_resolution",
-            "initialization_parameters": {"deployment_name": model_deployment_name},
+            "initialization_parameters": {
+                "deployment_name": model_deployment_name
+            },
             "data_mapping": {
-                "query":    "{{item.query}}",
+                "query": "{{item.query}}",
                 "response": "{{item.response}}",
             },
         },
+
         {
             "type": "azure_ai_evaluator",
             "name": "relevance",
             "evaluator_name": "builtin.relevance",
-            "initialization_parameters": {"deployment_name": model_deployment_name},
+            "initialization_parameters": {
+                "deployment_name": model_deployment_name
+            },
             "data_mapping": {
-                "query":    "{{item.query}}",
+                "query": "{{item.query}}",
                 "response": "{{item.response}}",
             },
         },
+
         {
             "type": "azure_ai_evaluator",
             "name": "groundedness",
             "evaluator_name": "builtin.groundedness",
-            "initialization_parameters": {"deployment_name": model_deployment_name},
+            "initialization_parameters": {
+                "deployment_name": model_deployment_name
+            },
             "data_mapping": {
-                "query":    "{{item.query}}",
+                "query": "{{item.query}}",
                 "response": "{{item.response}}",
-                "context":  "{{item.ground_truth}}",
+                "context": "{{item.ground_truth}}",
             },
         },
     ]
 
     print("\nCreating evaluation...")
+
     eval_object = client.evals.create(
         name="Trail Guide Quality Evaluation",
         data_source_config=data_source_config,
         testing_criteria=testing_criteria,
     )
 
-    print(f"\n✓ Evaluation definition created")
+    print("\n✓ Evaluation definition created")
     print(f"  Evaluation ID: {eval_object.id}")
+
     return eval_object
 
 
@@ -212,11 +255,9 @@ def create_evaluation_definition():
 
 def run_evaluation(eval_object, data_id):
     """
-    Start a cloud evaluation run that scores every record in the dataset.
-
-    The run is asynchronous — Foundry processes items in parallel in the cloud.
-    We get a run object immediately; its status starts as 'queued' or 'running'.
+    Start a cloud evaluation run.
     """
+
     section("Step 3: Running cloud evaluation")
 
     eval_run = client.evals.runs.create(
@@ -231,10 +272,15 @@ def run_evaluation(eval_object, data_id):
         ),
     )
 
-    print(f"\n✓ Evaluation run started")
+    print("\n✓ Evaluation run started")
     print(f"  Run ID: {eval_run.id}")
     print(f"  Status: {eval_run.status}")
-    print(f"\nThis may take 15-60+ minutes for 89 items depending on capacity and quota...")
+
+    print(
+        "\nThis may take 15-60+ minutes for 89 items "
+        "depending on capacity and quota..."
+    )
+
     return eval_run
 
 
@@ -244,15 +290,15 @@ def run_evaluation(eval_object, data_id):
 
 def poll_for_results(eval_object, eval_run):
     """
-    Repeatedly check the run status every 10 seconds until it is 'completed'.
-
-    Returns the final run object (which contains the report URL and results).
-    Exits with code 1 if the run fails so CI pipelines surface the error.
+    Repeatedly check the run status until it completes.
     """
+
     section("Step 4: Polling for completion")
 
     start_time = time.time()
+
     while True:
+
         run = client.evals.runs.retrieve(
             run_id=eval_run.id,
             eval_id=eval_object.id,
@@ -261,11 +307,24 @@ def poll_for_results(eval_object, eval_run):
         elapsed = int(time.time() - start_time)
 
         if run.status == "completed":
-            print(f"\n\n✓ Evaluation completed in {elapsed} seconds")
+
+            print(
+                f"\n\n✓ Evaluation completed successfully"
+            )
+
+            print(
+                f"  Total time: {elapsed} seconds"
+            )
+
             break
+
         elif run.status == "failed":
-            # Raise so main() catches it, writes RESULTS_FILE, then exits
-            error_detail = getattr(run, "error", None) or "No additional details available."
+
+            error_detail = (
+                getattr(run, "error", None)
+                or "No additional details available."
+            )
+
             raise RuntimeError(
                 f"Evaluation run failed after {elapsed}s.\n"
                 f"  Eval ID : {eval_object.id}\n"
@@ -273,9 +332,15 @@ def poll_for_results(eval_object, eval_run):
                 f"  Error   : {error_detail}\n"
                 f"  To inspect: open Azure AI Foundry portal > Evaluations"
             )
+
         else:
-            # Overwrite the same line so the terminal isn't flooded
-            print(f"  [{elapsed}s] Status: {run.status}", end="\r", flush=True)
+
+            print(
+                f"  [{elapsed}s] Status: {run.status}",
+                end="\r",
+                flush=True,
+            )
+
             time.sleep(10)
 
     return run
@@ -287,19 +352,14 @@ def poll_for_results(eval_object, eval_run):
 
 def retrieve_and_display_results(eval_object, run):
     """
-    Fetch per-item evaluator outputs, compute aggregate statistics, print a
-    human-readable summary, and write the same summary to RESULTS_FILE.
-
-    Scores are on a 1-5 scale; a score >= 3 is considered a pass.
-
-    The written file is intended to be committed to the branch so the
-    GitHub Actions workflow can read it without re-running the evaluation.
-
-    Returns the raw list of output items for any further inspection.
+    Fetch per-item evaluator outputs, compute aggregate statistics,
+    print a human-readable summary, and write the same summary
+    to RESULTS_FILE.
     """
+
     section("Step 5: Retrieving results")
 
-    print(f"\nEvaluation Summary")
+    print("\nEvaluation Summary")
 
     # Retrieve every scored item from the run
     output_items = list(
@@ -309,93 +369,251 @@ def retrieve_and_display_results(eval_object, run):
         )
     )
 
-    # Separate items by status so we can report errors alongside scores
+    print(
+        f"  Retrieved output items: {len(output_items)}"
+    )
+
+    # ------------------------------------------------------------------
+    # DEBUG
+    # ------------------------------------------------------------------
+    # This lets us see the actual structure returned by the installed
+    # SDK version.
+    #
+    # Keep this initially. Once confirmed, it can be removed.
+    # ------------------------------------------------------------------
+
+    if output_items:
+        print("\nDEBUG: First evaluation output item:")
+        print(output_items[0])
+
+    # ------------------------------------------------------------------
+    # Separate errored and completed items
+    # ------------------------------------------------------------------
+
     errored_items = [
-        item for item in output_items
+        item
+        for item in output_items
         if getattr(item, "status", None) == "error"
     ]
+
     scored_items = [
-        item for item in output_items
-        if getattr(item, "status", None) != "error"
+        item
+        for item in output_items
+        if getattr(item, "status", None) == "completed"
     ]
 
     if errored_items:
-        print(f"\n  ⚠ {len(errored_items)} item(s) errored during evaluation.")
-        print(f"    First error: {getattr(errored_items[0], 'error', 'details unavailable')}")
-        print(f"    Open Azure AI Foundry portal > Evaluations to inspect all failed items.")
 
-    # Collect individual scores grouped by metric name
+        print(
+            f"\n  ⚠ {len(errored_items)} "
+            "item(s) errored during evaluation."
+        )
+
+        print(
+            "    First error: "
+            f"{getattr(errored_items[0], 'error', 'details unavailable')}"
+        )
+
+        print(
+            "    Open Azure AI Foundry portal > "
+            "Evaluations to inspect all failed items."
+        )
+
+    # ------------------------------------------------------------------
+    # Collect individual scores
+    # ------------------------------------------------------------------
+
     scores: dict[str, list[float]] = {
         "intent_resolution": [],
-        "relevance":         [],
-        "groundedness":      [],
+        "relevance": [],
+        "groundedness": [],
     }
 
     for item in scored_items:
-        if hasattr(item, "evaluator_outputs"):
-            for output in item.evaluator_outputs:
-                if output.name in scores and hasattr(output, "score"):
-                    scores[output.name].append(output.score)
 
-    # --- Build summary text (printed to console and written to file) ---
-    # Everything written to `lines` ends up both on screen and in the file,
-    # so the file always has useful content regardless of whether scores loaded.
+        # Current Foundry SDK output items expose evaluator
+        # results through the results collection.
+        results = getattr(item, "results", None)
+
+        if results is None:
+
+            print(
+                "\nDEBUG: No 'results' attribute found on item:"
+            )
+
+            print(item)
+
+            continue
+
+        for result in results:
+
+            # Handle dictionary-style results
+            if isinstance(result, dict):
+
+                name = result.get("name")
+                score = result.get("score")
+
+            # Handle SDK model/object-style results
+            else:
+
+                name = getattr(
+                    result,
+                    "name",
+                    None,
+                )
+
+                score = getattr(
+                    result,
+                    "score",
+                    None,
+                )
+
+            if name in scores and score is not None:
+
+                scores[name].append(
+                    float(score)
+                )
+
+    # ------------------------------------------------------------------
+    # Build summary
+    # ------------------------------------------------------------------
 
     metric_labels = {
         "intent_resolution": "Intent Resolution",
-        "relevance":         "Relevance        ",
-        "groundedness":      "Groundedness     ",
+        "relevance": "Relevance        ",
+        "groundedness": "Groundedness     ",
     }
 
     lines = [
         "=" * 80,
         " Trail Guide Agent - Evaluation Results",
         "=" * 80,
-        f"\n  Eval ID      : {eval_object.id}",
+        "",
+        f"  Eval ID      : {eval_object.id}",
         f"  Run ID       : {run.id}",
         f"  Total items  : {len(output_items)}",
         f"  Errored items: {len(errored_items)}",
         f"  Scored items : {len(scored_items)}",
-        "\nAverage Scores (1-5 scale, threshold: 3)",
+        "",
+        "Average Scores (1-5 scale, threshold: 3)",
     ]
 
     any_scores = False
-    pass_lines = ["\nPass Rates (score >= 3)"]
+
+    pass_lines = [
+        "",
+        "Pass Rates (score >= 3)",
+    ]
 
     for key, label in metric_labels.items():
-        values = scores[key]
-        if values:
-            any_scores = True
-            avg  = sum(values) / len(values)
-            rate = sum(1 for v in values if v >= 3) / len(values) * 100
-            lines.append(f"  {label}: {avg:.2f} (n={len(values)})")
-            pass_lines.append(f"  {label}: {rate:.1f}%")
 
-    if not any_scores:
-        # Scores missing — the evaluation may have completed but returned no
-        # evaluator_outputs. Open the Report URL above to inspect in the portal.
-        lines.append("  No scores returned — open Azure AI Foundry portal > Evaluations for details.")
-        pass_lines.append("  No scores returned.")
+        values = scores[key]
+
+        if values:
+
+            any_scores = True
+
+            avg = (
+                sum(values)
+                / len(values)
+            )
+
+            pass_rate = (
+                sum(
+                    1
+                    for value in values
+                    if value >= 3
+                )
+                / len(values)
+                * 100
+            )
+
+            lines.append(
+                f"  {label}: "
+                f"{avg:.2f} "
+                f"(n={len(values)})"
+            )
+
+            pass_lines.append(
+                f"  {label}: "
+                f"{pass_rate:.1f}%"
+            )
+
+        else:
+
+            lines.append(
+                f"  {label}: No scores returned"
+            )
+
+            pass_lines.append(
+                f"  {label}: No scores returned"
+            )
 
     lines.extend(pass_lines)
+
     summary = "\n".join(lines)
 
-    print(summary)
+    print("\n" + summary)
 
-    # Write to file so the GitHub Actions 'comment' job can read it directly
-    RESULTS_FILE.write_text(summary, encoding="utf-8")
-    print(f"\n  Results saved to {RESULTS_FILE}")
-    print(f"  Commit this file so the GitHub Actions workflow can read it.")
+    # ------------------------------------------------------------------
+    # Save results
+    # ------------------------------------------------------------------
 
-    # Emit report_url as a GitHub Actions step output when running in CI
-    report_url = getattr(run, "report_url", None) or (
-        f"{endpoint.rstrip('/')}/evaluations/{eval_object.id}/runs/{run.id}"
+    RESULTS_FILE.write_text(
+        summary,
+        encoding="utf-8",
     )
-    github_output = os.environ.get("GITHUB_OUTPUT")
+
+    print(
+        f"\n  Results saved to {RESULTS_FILE}"
+    )
+
+    # ------------------------------------------------------------------
+    # Report URL
+    # ------------------------------------------------------------------
+
+    report_url = getattr(
+        run,
+        "report_url",
+        None,
+    )
+
+    if not report_url:
+
+        report_url = (
+            f"{endpoint.rstrip('/')}"
+            f"/evaluations/{eval_object.id}"
+            f"/runs/{run.id}"
+        )
+
+    print(
+        f"  Report URL: {report_url}"
+    )
+
+    # ------------------------------------------------------------------
+    # GitHub Actions output
+    # ------------------------------------------------------------------
+
+    github_output = os.environ.get(
+        "GITHUB_OUTPUT"
+    )
+
     if github_output:
-        with open(github_output, "a", encoding="utf-8") as gh_out:
-            gh_out.write(f"report_url={report_url}\n")
-        print(f"  GitHub Actions output set: report_url={report_url}")
+
+        with open(
+            github_output,
+            "a",
+            encoding="utf-8",
+        ) as gh_out:
+
+            gh_out.write(
+                f"report_url={report_url}\n"
+            )
+
+        print(
+            "  GitHub Actions output set: "
+            f"report_url={report_url}"
+        )
 
     return output_items
 
@@ -405,27 +623,79 @@ def retrieve_and_display_results(eval_object, run):
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    """Orchestrate the full evaluation pipeline step by step."""
-    section(" Trail Guide Agent - Cloud Evaluation")
-    print(f"\nConfiguration:")
-    print(f"  Project: {endpoint}")
-    print(f"  Model:   {model_deployment_name}")
-    print(f"  Dataset: {dataset_name} (v{dataset_version})")
+    """
+    Orchestrate the full evaluation pipeline.
+    """
+
+    section(
+        " Trail Guide Agent - Cloud Evaluation"
+    )
+
+    print("\nConfiguration:")
+
+    print(
+        f"  Project: {endpoint}"
+    )
+
+    print(
+        f"  Model: {model_deployment_name}"
+    )
+
+    print(
+        f"  Dataset: "
+        f"{dataset_name} "
+        f"(v{dataset_version})"
+    )
 
     try:
-        data_id     = upload_dataset()                          # Step 1
-        eval_object = create_evaluation_definition()            # Step 2
-        eval_run    = run_evaluation(eval_object, data_id)      # Step 3
-        run         = poll_for_results(eval_object, eval_run)   # Step 4
-        retrieve_and_display_results(eval_object, run)          # Step 5
 
-        section("Cloud evaluation complete")
-        print(f"\nNext steps:")
-        print(f"  1. Review detailed results in Azure AI Foundry portal")
-        print(f"  2. Analyze patterns in successful and failed evaluations")
-        print(f"  3. Commit {RESULTS_FILE} and push so the PR workflow can use it")
+        # Step 1
+        data_id = upload_dataset()
+
+        # Step 2
+        eval_object = create_evaluation_definition()
+
+        # Step 3
+        eval_run = run_evaluation(
+            eval_object,
+            data_id,
+        )
+
+        # Step 4
+        run = poll_for_results(
+            eval_object,
+            eval_run,
+        )
+
+        # Step 5
+        retrieve_and_display_results(
+            eval_object,
+            run,
+        )
+
+        section(
+            "Cloud evaluation complete"
+        )
+
+        print("\nNext steps:")
+
+        print(
+            "  1. Review detailed results "
+            "in Microsoft Foundry portal"
+        )
+
+        print(
+            "  2. Analyze patterns in "
+            "successful and failed evaluations"
+        )
+
+        print(
+            f"  3. Commit {RESULTS_FILE} "
+            "and push so the PR workflow can use it"
+        )
 
     except Exception as e:
+
         error_message = (
             f"{'=' * 80}\n"
             f" Trail Guide Agent - Evaluation FAILED\n"
@@ -435,12 +705,19 @@ def main() -> None:
             f"  - Verify AZURE_AI_PROJECT_ENDPOINT in .env file\n"
             f"  - Check Azure credentials: az login\n"
             f"  - Ensure GPT-5.1 model is deployed and accessible\n"
-            f"  - Ensure the caller has Foundry User access at the AI account scope\n"
-            f"  - If you just ran azd up, wait 1-2 minutes for role propagation and retry once\n"
+            f"  - Ensure the caller has Foundry User access "
+            f"at the AI account scope\n"
+            f"  - If you just ran azd up, wait 1-2 minutes "
+            f"for role propagation and retry once\n"
         )
+
         print(error_message)
-        # Write the error to the results file so it's never left empty
-        RESULTS_FILE.write_text(error_message, encoding="utf-8")
+
+        RESULTS_FILE.write_text(
+            error_message,
+            encoding="utf-8",
+        )
+
         sys.exit(1)
 
 
